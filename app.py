@@ -10,7 +10,7 @@ import streamlit as st
 # ============================================================
 
 st.set_page_config(
-    page_title="AML Alert Escalation Analysis",
+    page_title="AML Alert Escalation — ML Analysis",
     page_icon="🔍",
     layout="wide",
 )
@@ -107,7 +107,7 @@ pages = [
 selection = st.sidebar.radio("Go to:", pages)
 
 st.sidebar.divider()
-st.sidebar.caption("Built from precomputed EDA summaries.")
+st.sidebar.caption("Built around the final ensemble pipeline and precomputed EDA summaries.")
 st.sidebar.caption("Raw multi-million-row Parquet files are not loaded by the website.")
 
 
@@ -135,7 +135,8 @@ if selection == "1. Overview":
 
     st.write(
         "We then converted these behavioral dimensions into numerical "
-        "features for a CatBoost machine-learning model."
+        "features, including recent-vs-historical activity, transaction "
+        "anomalies, burstiness and recent transaction-size trends."
     )
 
     st.markdown("### What the website covers")
@@ -149,9 +150,13 @@ if selection == "1. Overview":
         **Behavior:** transaction volume, amount statistics, money flow,
         transaction-type composition, recent activity and history
 
-        **Feature engineering:** how the EDA became model features
+        **Feature engineering:** behavioral, recency, anomaly, burstiness and trend features
 
-        **Model:** CatBoostClassifier with 5-fold stratified cross-validation
+        **Model:** CatBoost + LightGBM + Logistic Regression ensemble with seed-bagging
+
+        **Feature selection:** CatBoost feature-importance pruning
+
+        **Validation:** 5-fold stratified cross-validation
 
         **Metric:** ROC-AUC, which evaluates ranking quality
         """
@@ -577,15 +582,15 @@ elif selection == "5. Key Behavioral Patterns":
     st.markdown("### 5. Recent activity")
 
     st.write(
-        "Activity is measured across several windows before the alert. "
-        "This captures both short-term and longer-term transaction behavior."
+        "Activity is measured across 7-, 30- and 90-day windows before the alert. "
+        "The final model also compares recent activity with the account's "
+        "own historical baseline."
     )
 
     st.code(
-        "transactions_last_1d\ntransactions_last_3d\n"
-        "transactions_last_7d\ntransactions_last_14d\n"
-        "transactions_last_30d\ntransactions_last_60d\n"
-        "transactions_last_90d\nactivity_7d_vs_30d"
+        "tx_last_7d\namount_last_7d\namount_mean_last_7d\n"
+        "tx_last_30d\namount_last_30d\namount_mean_last_30d\n"
+        "tx_last_90d\namount_last_90d\nactivity_7d_vs_30d"
     )
 
     # --------------------------------------------------------
@@ -602,13 +607,16 @@ elif selection == "5. Key Behavioral Patterns":
     )
 
     st.code(
-        "history_span_days\ndays_since_last_transaction"
+        "history_span_days\ndays_since_last_transaction\n"
+        "last_tx_zscore\nmax_to_mean_ratio\n"
+        "gap_cv\nrecent_amount_trend\nactivity_vs_own_baseline"
     )
 
     st.info(
-        "The current three core EDA CSVs show overall transaction behavior. "
-        "They do not by themselves support a target-by-target behavioral "
-        "comparison, so the website does not invent one."
+        "The EDA provides the foundation for the model. The final feature "
+        "pipeline extends it with recency windows, account-level anomaly "
+        "scores, transaction-gap variability, recent amount trends and "
+        "activity relative to the account's own historical baseline."
     )
 
 
@@ -668,8 +676,8 @@ elif selection == "6. EDA → Feature Engineering":
     )
 
     st.write(
-        "**Time windows:** count activity in 1-, 3-, 7-, 14-, 30-, "
-        "60- and 90-day windows before the alert."
+        "**Time windows:** summarize transaction count and amount behavior "
+        "over 7-, 30- and 90-day windows before the alert."
     )
 
     st.write(
@@ -678,7 +686,9 @@ elif selection == "6. EDA → Feature Engineering":
     )
 
     st.write(
-        "**Recency:** measure how recently the last transaction happened."
+        "**Behavior change:** compare recent activity with historical activity, "
+        "measure the latest transaction's z-score, transaction-gap variability, "
+        "and the recent transaction-size trend."
     )
 
     st.markdown("### Time leakage prevention")
@@ -709,53 +719,52 @@ elif selection == "7. How the Model Works":
 
     st.write(
         "Each alert becomes one row containing numerical behavioral "
-        "features derived from its transactions before the alert."
+        "features derived only from transactions before the alert."
     )
 
-    st.markdown("### 2. Learning")
+    st.markdown("### 2. Feature selection")
 
     st.write(
-        "We use **CatBoostClassifier**. CatBoost is a gradient-boosted "
-        "decision-tree model: many trees are built sequentially, with "
-        "later trees focusing on errors left by earlier trees."
+        "A quick CatBoost model ranks the engineered features by importance. "
+        "The strongest cumulative importance mass is retained to reduce "
+        "redundant or noisy features."
     )
 
-    st.markdown("### 3. What the trees can learn")
+    st.markdown("### 3. Three-model ensemble")
 
     st.write(
-        "The model can combine several behavioral signals rather than "
-        "using one rule. For example, transaction amount statistics, "
-        "direction ratios, transaction-type ratios and recent activity "
-        "can interact in the same prediction."
+        "**CatBoost** captures nonlinear interactions. "
+        "**LightGBM** provides a second gradient-boosting perspective. "
+        "**Logistic Regression** adds a simpler linear model for diversity. "
+        "Each model is trained with multiple random seeds."
     )
 
-    st.markdown("### 4. Output")
+    st.markdown("### 4. Rank averaging")
 
     st.write(
-        "For every test alert, the model outputs the estimated probability "
-        "for class 1, meaning escalation."
+        "The model outputs are converted to ranks and combined. When LightGBM "
+        "is available, the final blend uses 45% CatBoost, 40% LightGBM and "
+        "15% Logistic Regression. This directly supports the ROC-AUC ranking objective."
     )
 
     st.markdown("### 5. Final test prediction")
 
     st.code(
-        """
-test alert
-    ↓
-historical transactions before alert
-    ↓
-behavioral features
-    ↓
-CatBoost
-    ↓
-probability of escalation
-        """
+        "test alert\n"
+        "    ↓\n"
+        "historical transactions before alert\n"
+        "    ↓\n"
+        "behavioral + recency + anomaly + trend features\n"
+        "    ↓\n"
+        "feature-importance pruning\n"
+        "    ↓\n"
+        "CatBoost + LightGBM + Logistic Regression\n"
+        "    ↓\n"
+        "rank averaging\n"
+        "    ↓\n"
+        "escalation probability"
     )
 
-    st.success(
-        "The competition scores how well these probabilities rank "
-        "escalated alerts above dismissed alerts."
-    )
 
 
 # ============================================================
@@ -774,6 +783,7 @@ elif selection == "8. Model Features":
                 "Direction",
                 "Transaction Types",
                 "Time Windows",
+                "Trend / Anomaly / Burstiness",
                 "History",
                 "Calendar",
             ],
@@ -786,9 +796,11 @@ elif selection == "8. Model Features":
                 "incoming_ratio, outgoing_ratio",
                 "card_ratio, bank_transfer_ratio, "
                 "cash_ratio, international_ratio",
-                "1d, 3d, 7d, 14d, 30d, 60d, 90d activity",
+                "7d, 30d, 90d counts and amount statistics",
+                "last_tx_zscore, max_to_mean_ratio, gap_cv, "
+                "recent_amount_trend, activity_vs_own_baseline",
                 "history_span_days, days_since_last_transaction",
-                "signal day/month/weekday features",
+                "signal month/weekday features",
             ],
         }
     )
@@ -799,7 +811,7 @@ elif selection == "8. Model Features":
         use_container_width=True,
     )
 
-    st.markdown("### Interpreting feature importance")
+    st.markdown("### Feature-importance pruning and interpretation")
 
     if (
         feature_importance is not None
@@ -853,34 +865,36 @@ elif selection == "9. Validation & Metric":
     st.markdown("### Cross-validation")
 
     st.write(
-        "The final model uses **5-fold Stratified Cross-Validation**. "
-        "The training alerts are split into five folds while preserving "
-        "the class distribution as much as possible."
+        "The final ensemble uses **5-fold Stratified Cross-Validation**. "
+        "Each fold trains on four parts and evaluates on the held-out fifth "
+        "part. Test predictions are averaged across folds and model seeds."
     )
 
-    st.markdown("### Model parameters")
+    st.markdown("### Model configuration")
 
     parameters = pd.DataFrame(
         {
             "Parameter": [
-                "Model",
-                "Iterations",
-                "Learning rate",
-                "Depth",
-                "L2 regularization",
-                "Evaluation metric",
-                "Loss function",
-                "Early stopping",
+                "Models",
+                "Cross-validation",
+                "Seeds",
+                "CatBoost",
+                "LightGBM",
+                "Logistic Regression",
+                "Ensemble weights",
+                "Feature selection",
+                "Final metric",
             ],
             "Value": [
-                "CatBoostClassifier",
-                "2500",
-                "0.03",
-                "7",
-                "5",
-                "AUC",
-                "Logloss",
-                "150 rounds",
+                "CatBoost + LightGBM + Logistic Regression",
+                "5-fold StratifiedKFold",
+                "42, 202, 777",
+                "2500 iterations, depth 7, learning rate 0.03, L2 = 5",
+                "2000 estimators, depth 7, 63 leaves, learning rate 0.03",
+                "StandardScaler + median imputation, C = 0.5, balanced classes",
+                "45% CatBoost / 40% LightGBM / 15% Logistic Regression",
+                "Top 85% cumulative CatBoost importance mass, minimum 15 features",
+                "ROC-AUC",
             ],
         }
     )
@@ -952,8 +966,9 @@ elif selection == "10. Conclusion":
 
     st.write(
         "The workflow turns transaction history into an alert-level "
-        "behavioral representation and then uses CatBoost to estimate "
-        "the probability of escalation."
+        "behavioral representation, selects the strongest features, and "
+        "uses a seed-bagged ensemble of CatBoost, LightGBM and Logistic "
+        "Regression to estimate escalation probability."
     )
 
     st.markdown("### What the analysis contributes")
@@ -962,13 +977,17 @@ elif selection == "10. Conclusion":
         """
         **Behavioral EDA** → shows the structure of transaction activity
 
-        **Feature engineering** → converts that activity into numerical signals
+        **Feature engineering** → converts activity into behavioral, recency, anomaly and trend signals
+
+        **Feature pruning** → removes lower-value or redundant columns using CatBoost importance
 
         **Leakage control** → uses only transactions before the alert
 
-        **CatBoost** → learns interactions among the behavioral features
+        **Ensemble** → combines CatBoost, LightGBM and Logistic Regression with seed-bagging
 
-        **5-fold validation** → checks performance across multiple splits
+        **Rank averaging** → combines model rankings for the ROC-AUC objective
+
+        **5-fold validation** → checks performance across multiple stratified splits
 
         **ROC-AUC** → evaluates how well escalation probabilities are ranked
         """
@@ -982,13 +1001,15 @@ Transaction history
         ↓
 EDA
         ↓
-Behavioral features
+Behavioral + recency + anomaly + trend features
         ↓
-Leakage-safe feature matrix
+Feature-importance pruning
         ↓
-CatBoostClassifier
+CatBoost + LightGBM + Logistic Regression
         ↓
-5-fold Stratified Cross-Validation
+5-fold Stratified Cross-Validation + seed-bagging
+        ↓
+Rank averaging
         ↓
 ROC-AUC
         ↓
