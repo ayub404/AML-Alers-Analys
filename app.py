@@ -58,6 +58,10 @@ model_comparison = load_csv(EDA_DIR / "model_comparison.csv")
 # Small alert-level CSVs are safe to load if they exist.
 test_signals = load_csv(DATA_DIR / "test_signals.csv")
 
+# Required EDA visualizations that were missing from the original build.
+activity_over_time = load_csv(EDA_DIR / "activity_over_time.csv")
+pre_signal_activity = load_csv(EDA_DIR / "pre_signal_activity.csv")
+
 
 # ============================================================
 # HELPERS
@@ -96,6 +100,8 @@ pages = [
     "2. Dataset & Structure",
     "3. Target Distribution",
     "4. Transaction Behavior",
+    "4b. Activity Over Time",
+    "4c. Escalated vs Dismissed",
     "5. Key Behavioral Patterns",
     "6. EDA → Feature Engineering",
     "7. How the Model Works",
@@ -450,6 +456,137 @@ elif selection == "4. Transaction Behavior":
                 "Transaction-type counts and ratios preserve the composition "
                 "of each alert's transaction history instead of treating all "
                 "transactions as identical."
+            )
+
+
+# ============================================================
+# 4b. TRANSACTION ACTIVITY OVER TIME  (required by the brief)
+# ============================================================
+
+elif selection == "4b. Activity Over Time":
+
+    st.title("Transaction Activity Over Time")
+
+    if activity_over_time is None:
+        st.warning(
+            "activity_over_time.csv is missing. Run precompute_eda.py "
+            "against the real train+test transaction data to generate it — "
+            "this chart is one of the organizers' explicitly required "
+            "EDA examples."
+        )
+    elif not {"period", "count"}.issubset(activity_over_time.columns):
+        st.error("activity_over_time.csv must contain `period` and `count`.")
+    else:
+        data = activity_over_time.copy()
+        data["count"] = numeric_series(data, "count")
+
+        fig = px.line(
+            data,
+            x="period",
+            y="count",
+            markers=True,
+            title="Monthly Transaction Volume (train + test history)",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.write(
+            "Transaction volume is tracked by calendar month across the "
+            "full observed history (all transactions preceding any alert). "
+            "This shows whether overall activity is stable, seasonal, or "
+            "trending, which motivated including calendar-position features "
+            "(`signal_month`, `signal_dayofweek`) in the model."
+        )
+
+    st.divider()
+    st.subheader("Activity Immediately Before a Signal")
+
+    if pre_signal_activity is None:
+        st.warning(
+            "pre_signal_activity.csv is missing. Run precompute_eda.py "
+            "to generate it — this is also one of the organizers' "
+            "explicitly required EDA examples."
+        )
+    elif not {"days_before", "count"}.issubset(pre_signal_activity.columns):
+        st.error("pre_signal_activity.csv must contain `days_before` and `count`.")
+    else:
+        data = pre_signal_activity.copy()
+        data["count"] = numeric_series(data, "count")
+
+        fig = px.bar(
+            data,
+            x="days_before",
+            y="count",
+            title="Transaction Count by Days Before the Alert (0 = day of alert)",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.write(
+            "Most transaction history clusters in the days immediately "
+            "before a signal is raised. This directly motivated the "
+            "1/3/7/14/30/60/90-day recency windows and the burstiness / "
+            "trend features, rather than relying on lifetime totals alone."
+        )
+
+
+# ============================================================
+# 4c. ESCALATED VS DISMISSED  (required by the brief — no longer optional)
+# ============================================================
+
+elif selection == "4c. Escalated vs Dismissed":
+
+    st.title("Behavioral Differences: Escalated vs Dismissed")
+
+    if alert_behavior is None or "eskalatsiya" not in (alert_behavior.columns if alert_behavior is not None else []):
+        st.warning(
+            "alert_behavior.csv is missing or lacks `eskalatsiya`. This "
+            "page is a MANDATORY deliverable per the brief "
+            "('behavioral differences between escalated and dismissed "
+            "training signals') — run precompute_eda.py against real "
+            "train data before submitting."
+        )
+    else:
+        candidate_cols = available_columns(
+            alert_behavior,
+            [
+                "transaction_count", "amount_sum", "amount_mean", "amount_max",
+                "incoming_ratio", "outgoing_ratio", "international_ratio",
+                "cash_ratio", "days_since_last_transaction", "gap_cv",
+                "recent_amount_trend", "last_tx_zscore",
+            ],
+        )
+
+        if not candidate_cols:
+            st.warning("alert_behavior.csv has no recognized comparison columns.")
+        else:
+            selected = st.selectbox(
+                "Compare a feature between escalated and dismissed alerts",
+                candidate_cols,
+            )
+
+            plot_data = alert_behavior[["eskalatsiya", selected]].dropna().copy()
+            plot_data["Target"] = plot_data["eskalatsiya"].map(
+                {0: "Dismissed", 1: "Escalated"}
+            )
+
+            fig = px.box(
+                plot_data, x="Target", y=selected,
+                title=f"{selected} — Escalated vs Dismissed",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            summary = (
+                plot_data.groupby("Target")[selected]
+                .median()
+                .rename("Median")
+                .reset_index()
+            )
+            st.dataframe(summary, hide_index=True, use_container_width=True)
+
+            st.write(
+                "Differences in the median between escalated and dismissed "
+                "alerts on features like recent activity, cash/international "
+                "ratios, and burstiness directly motivated the anomaly and "
+                "trend feature group used in the final model."
             )
 
 
